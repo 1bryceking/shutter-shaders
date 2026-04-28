@@ -1,5 +1,12 @@
 import { FluidShader } from '../src/FluidShader.js';
 
+function showError(msg) {
+  const el = document.createElement('pre');
+  el.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#1a0000;color:#ff6b6b;padding:24px;font:13px/1.5 monospace;white-space:pre-wrap;z-index:999';
+  el.textContent = '⚠ FluidShader error:\n\n' + msg;
+  document.body.appendChild(el);
+}
+
 const SLIDERS = [
   { key: 'distortion',      label: 'Distortion',        min: 0,    max: 0.12, step: 0.001, def: 0.016 },
   { key: 'patternScale',    label: 'Pattern Scale',     min: 0.1,  max: 3.0,  step: 0.05,  def: 0.5   },
@@ -15,8 +22,14 @@ const SLIDERS = [
 ];
 
 const canvas = document.getElementById('canvas');
-const fluid  = new FluidShader(canvas);
-fluid.start();
+let fluid;
+try {
+  fluid = new FluidShader(canvas);
+  fluid.start();
+} catch (e) {
+  showError(e.message || String(e));
+  throw e;
+}
 
 // Sliders
 const container = document.getElementById('sliders');
@@ -34,7 +47,7 @@ for (const s of SLIDERS) {
   input.step = s.step; input.value = s.def;
   input.addEventListener('input', () => {
     const v = parseFloat(input.value);
-    fluid.setParams({ [s.key]: v });
+    fluid?.setParams({ [s.key]: v });
     valEl.textContent = fmt(v);
   });
   row.append(lbl, input, valEl);
@@ -53,8 +66,8 @@ document.querySelectorAll('input[type=file]').forEach(input => {
   });
 });
 
-document.getElementById('btn-transition').addEventListener('click', () => fluid.transition(1200));
-document.getElementById('btn-ripple').addEventListener('click', () => fluid.addRipple(0.5, 0.5, 1.0));
+document.getElementById('btn-transition').addEventListener('click', () => fluid?.transition(1200));
+document.getElementById('btn-ripple').addEventListener('click', () => fluid?.addRipple(0.5, 0.5, 1.0));
 
 // Panel toggle
 const toggle = document.getElementById('panel-toggle');

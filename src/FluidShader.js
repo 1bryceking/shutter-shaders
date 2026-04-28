@@ -287,8 +287,8 @@ export class FluidShader {
     gl.uniform1i(this._locs['uTexB'], 1);
 
     this._vao  = gl.createVertexArray();
-    this._texA = this._placeholderTex([18, 18, 40, 255]);
-    this._texB = this._placeholderTex([40, 12, 60, 255]);
+    this._texA = this._gradientTex(['#1a0533','#3d1a78','#7b2fff','#c77dff']);
+    this._texB = this._gradientTex(['#0d2b52','#1a6b8a','#2ec4b6','#cbf3f0']);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -384,11 +384,21 @@ export class FluidShader {
     return tex;
   }
 
-  _placeholderTex(rgba) {
+  // Generate a diagonal gradient texture so the fluid warp is visible immediately.
+  _gradientTex(stops) {
+    const SIZE = 256;
+    const c = new OffscreenCanvas(SIZE, SIZE);
+    const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, SIZE, SIZE);
+    stops.forEach((color, i) => g.addColorStop(i / (stops.length - 1), color));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
     const gl = this._gl, tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(rgba));
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
