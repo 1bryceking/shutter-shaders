@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fluid Shader — Demo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="panel">
+    <div id="panel-header">
+      <span>Fluid Shader</span>
+      <button id="panel-toggle">▾</button>
+    </div>
+
+    <div id="panel-body">
+      <div class="section-label">Images</div>
+      <div class="image-slots">
+        <label class="slot" id="slot-a">
+          <span>A (outgoing)</span>
+          <input type="file" accept="image/*" data-slot="a" />
+        </label>
+        <label class="slot" id="slot-b">
+          <span>B (incoming)</span>
+          <input type="file" accept="image/*" data-slot="b" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btn-transition">Transition A → B</button>
+        <button id="btn-ripple">Add Ripple</button>
+      </div>
+
+      <div class="section-label">Parameters</div>
+      <div id="sliders"></div>
+    </div>
+  </div>
+
+  <script type="module" src="demo.js"></script>
+</body>
+</html>
