@@ -1,8 +1,8 @@
 /**
  * FluidShader — WebGL 2.0 port of FluidShader.metal.
  *
- * Renders a curl-noise fluid warp with caustics, touch interaction,
- * expanding ripples, and A/B image cross-fade on a <canvas> element.
+ * Works in plain browsers (no bundler required) and with Vite/Rollup.
+ * Shader sources are inlined so there are no external fetches.
  *
  * Usage:
  *   const fluid = new FluidShader(canvas, { distortion: 0.02 });
@@ -10,9 +10,6 @@
  *   await fluid.setTextureB('img-b.jpg');
  *   fluid.start();
  */
-
-import VERT_SRC from './shaders/fluid.vert.glsl?raw';
-import FRAG_SRC from './shaders/fluid.frag.glsl?raw';
 
 const MAX_RIPPLES = 16;
 
@@ -31,11 +28,148 @@ const DEFAULTS = {
   touchSensitivity:0.45,
 };
 
+// ── Inlined GLSL sources ──────────────────────────────────────────────────────
+
+const VERT_SRC = /* glsl */`#version 300 es
+out vec2 vUV;
+void main() {
+  float x = float(gl_VertexID & 1) * 2.0 - 1.0;
+  float y = float((gl_VertexID >> 1) & 1) * 2.0 - 1.0;
+  vUV = vec2(float(gl_VertexID & 1), 1.0 - float((gl_VertexID >> 1) & 1));
+  gl_Position = vec4(x, y, 0.0, 1.0);
+}`;
+
+const FRAG_SRC = /* glsl */`#version 300 es
+precision highp float;
+
+in vec2 vUV;
+out vec4 fragColor;
+
+uniform sampler2D uTexA;
+uniform sampler2D uTexB;
+uniform float uTime;
+uniform float uAlphaA;
+uniform float uAlphaB;
+uniform float uDistortion;
+uniform vec2  uTouchUV;
+uniform float uTouchStrength;
+uniform float uPatternScale;
+uniform float uTimeScale;
+uniform float uTouchRadius;
+uniform float uTouchPull;
+uniform float uRippleStrength;
+uniform float uRefractStrength;
+uniform float uChromaticSpread;
+uniform float uCausticStrength;
+uniform float uCausticSharpness;
+uniform float uCausticScale;
+uniform vec2  uTouchVelocity;
+uniform int   uRippleCount;
+uniform vec4  uRipples[${MAX_RIPPLES}];
+
+vec2 fluid_hash2(vec2 p) {
+  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+  return fract(sin(p) * 43758.5453);
+}
+
+float fluid_noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = dot(fluid_hash2(i),                f);
+  float b = dot(fluid_hash2(i + vec2(1,0)), f - vec2(1,0));
+  float c = dot(fluid_hash2(i + vec2(0,1)), f - vec2(0,1));
+  float d = dot(fluid_hash2(i + vec2(1,1)), f - vec2(1,1));
+  return mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
+}
+
+float fluid_fbm(vec2 p) {
+  float v = 0.0, amp = 0.55;
+  for (int i = 0; i < 3; i++) {
+    v += amp * fluid_noise(p);
+    p  = p * 2.0 + vec2(1.7, 9.2);
+    amp *= 0.4;
+  }
+  return v;
+}
+
+vec2 fluid_curl(vec2 p, float t) {
+  const float eps = 0.005;
+  vec2 tp = p + vec2(0.0, t * 0.12);
+  float n1 = fluid_fbm(tp + vec2(0.0,  eps));
+  float n2 = fluid_fbm(tp + vec2(0.0, -eps));
+  float n3 = fluid_fbm(tp + vec2( eps, 0.0));
+  float n4 = fluid_fbm(tp + vec2(-eps, 0.0));
+  return vec2(n1 - n2, -(n3 - n4)) / (2.0 * eps);
+}
+
+void main() {
+  vec2 uv   = vUV;
+  vec2 base = uv * uPatternScale;
+  float ts  = uTimeScale;
+
+  vec2 dw = vec2(
+    fluid_fbm(base * 0.55 + vec2(0.0, uTime * 0.04 * ts)),
+    fluid_fbm(base * 0.55 + vec2(5.2, uTime * 0.04 * ts))
+  ) * 0.6;
+  vec2 scroll      = vec2(uTime * 0.09 * ts, uTime * 0.14 * ts);
+  vec2 ambientWarp = fluid_curl(base + dw + scroll, uTime * ts) * uDistortion;
+
+  vec2 touchWarp = vec2(0.0);
+  if (uTouchStrength > 0.001) {
+    vec2 d = uTouchUV - uv;
+    float falloff = exp(-dot(d,d) / max(uTouchRadius, 1e-4));
+    touchWarp = uTouchVelocity * falloff * uTouchStrength * uTouchPull;
+  }
+
+  vec2 rippleWarp = vec2(0.0);
+  for (int i = 0; i < ${MAX_RIPPLES}; i++) {
+    if (i >= uRippleCount) break;
+    vec4  r   = uRipples[i];
+    float age = uTime - r.z;
+    if (age < 0.0 || age > 2.0) continue;
+    vec2  d      = uv - r.xy;
+    float dist   = length(d);
+    float radius = age * 0.45;
+    float ring   = exp(-pow((dist - radius) / 0.08, 2.0));
+    float decay  = exp(-age * 1.4) * r.w;
+    float emerge = smoothstep(0.04, 0.12, radius);
+    vec2  dir    = dist > 1e-4 ? d / dist : vec2(0.0);
+    rippleWarp  += dir * ring * decay * emerge * uRippleStrength;
+  }
+
+  vec2 warpedUV = uv + ambientWarp + touchWarp + rippleWarp;
+
+  vec2  cBase = (base + dw + scroll) + vec2(0.0, uTime * 0.12 * ts);
+  const float epsC = 0.004;
+  float h  = fluid_fbm(cBase);
+  float hE = fluid_fbm(cBase + vec2( epsC, 0.0));
+  float hW = fluid_fbm(cBase + vec2(-epsC, 0.0));
+  float hN = fluid_fbm(cBase + vec2(0.0,  epsC));
+  float hS = fluid_fbm(cBase + vec2(0.0, -epsC));
+
+  vec2  nrm        = vec2(hE - hW, hN - hS) / (2.0 * epsC);
+  float refractMag = uDistortion * uRefractStrength;
+  vec2  offR = nrm * refractMag * (1.0 + uChromaticSpread);
+  vec2  offG = nrm * refractMag;
+  vec2  offB = nrm * refractMag * (1.0 - uChromaticSpread);
+
+  vec3 color = vec3(
+    texture(uTexA, warpedUV + offR).r * uAlphaA + texture(uTexB, warpedUV + offR).r * uAlphaB,
+    texture(uTexA, warpedUV + offG).g * uAlphaA + texture(uTexB, warpedUV + offG).g * uAlphaB,
+    texture(uTexA, warpedUV + offB).b * uAlphaA + texture(uTexB, warpedUV + offB).b * uAlphaB
+  );
+
+  float lap     = (hE + hW + hN + hS) * 0.25 - h;
+  float caustic = max(0.0, -lap * uCausticScale);
+  caustic       = pow(min(caustic, 1.6), uCausticSharpness) * uCausticStrength;
+  color += vec3(0.92, 0.97, 1.06) * caustic * max(uAlphaA, uAlphaB);
+
+  fragColor = vec4(color, uAlphaA + uAlphaB);
+}`;
+
+// ── Main class ────────────────────────────────────────────────────────────────
+
 export class FluidShader {
-  /**
-   * @param {HTMLCanvasElement} canvas
-   * @param {Partial<typeof DEFAULTS>} options
-   */
   constructor(canvas, options = {}) {
     this._canvas  = canvas;
     this._params  = { ...DEFAULTS, ...options };
@@ -45,15 +179,13 @@ export class FluidShader {
     this._raf     = null;
     this._startT  = null;
 
-    // Touch state
     this._touchUV       = [-1, -1];
     this._touchStrength = 0.0;
     this._touchVelocity = [0, 0];
     this._lastTouchUV   = null;
     this._lastTouchTime = null;
 
-    // Ripple ring buffer
-    this._ripples     = new Float32Array(MAX_RIPPLES * 4); // vec4 per ripple
+    this._ripples     = new Float32Array(MAX_RIPPLES * 4);
     this._rippleCount = 0;
     this._rippleHead  = 0;
 
@@ -68,59 +200,35 @@ export class FluidShader {
     this._bindEvents();
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
+  // ── Public API ──────────────────────────────────────────────────────────────
 
-  /** Load an image (URL, HTMLImageElement, or HTMLCanvasElement) into slot A. */
-  async setTextureA(source) {
-    this._texA = await this._loadTexture(source, this._texA);
-  }
+  async setTextureA(source) { this._texA = await this._loadTexture(source, this._texA); }
+  async setTextureB(source) { this._texB = await this._loadTexture(source, this._texB); }
 
-  /** Load an image into slot B. */
-  async setTextureB(source) {
-    this._texB = await this._loadTexture(source, this._texB);
-  }
+  setParams(patch) { Object.assign(this._params, patch); }
 
-  /** Live-update any subset of parameters. */
-  setParams(patch) {
-    Object.assign(this._params, patch);
-  }
-
-  /**
-   * Cross-fade from texture A to texture B over `durationMs` milliseconds.
-   * After the transition, A and B are swapped so the next call fades again.
-   */
   transition(durationMs = 1200) {
-    const startA  = this._alphaA;
-    const startB  = this._alphaB;
-    const begin   = performance.now();
-    const tick    = (now) => {
-      const t = Math.min((now - begin) / durationMs, 1.0);
-      const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; // ease-in-out quad
+    const startA = this._alphaA, startB = this._alphaB, begin = performance.now();
+    const tick = (now) => {
+      const t    = Math.min((now - begin) / durationMs, 1.0);
+      const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
       this._alphaA = startA * (1 - ease);
       this._alphaB = startB + (1 - startB) * ease;
-      if (t < 1.0) requestAnimationFrame(tick);
-      else {
-        // Swap so next transition goes back the other way
+      if (t < 1.0) {
+        requestAnimationFrame(tick);
+      } else {
         [this._texA, this._texB] = [this._texB, this._texA];
-        this._alphaA = 1.0;
-        this._alphaB = 0.0;
+        this._alphaA = 1.0; this._alphaB = 0.0;
       }
     };
     requestAnimationFrame(tick);
   }
 
-  /**
-   * Fire a ripple at UV coordinates (0-1 range).
-   * @param {number} u
-   * @param {number} v
-   * @param {number} strength  0..1
-   */
   addRipple(u, v, strength = 1.0) {
-    const now  = this._elapsed();
     const base = this._rippleHead * 4;
     this._ripples[base]     = u;
     this._ripples[base + 1] = v;
-    this._ripples[base + 2] = now;
+    this._ripples[base + 2] = this._elapsed();
     this._ripples[base + 3] = strength;
     this._rippleHead  = (this._rippleHead + 1) % MAX_RIPPLES;
     this._rippleCount = Math.min(this._rippleCount + 1, MAX_RIPPLES);
@@ -155,41 +263,32 @@ export class FluidShader {
     gl.deleteVertexArray(this._vao);
   }
 
-  // ── WebGL init ────────────────────────────────────────────────────────────
+  // ── WebGL init ──────────────────────────────────────────────────────────────
 
   _init() {
     const gl = this._canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true });
     if (!gl) throw new Error('WebGL 2.0 not supported');
     this._gl = gl;
 
-    const prog = this._compile(VERT_SRC, FRAG_SRC);
-    this._prog = prog;
+    this._prog = this._compile(VERT_SRC, FRAG_SRC);
 
-    // Cache uniform locations
-    const uniformNames = [
+    const names = [
       'uTexA','uTexB','uTime','uAlphaA','uAlphaB',
       'uDistortion','uTouchUV','uTouchStrength','uPatternScale','uTimeScale',
       'uTouchRadius','uTouchPull','uRippleStrength','uRefractStrength',
       'uChromaticSpread','uCausticStrength','uCausticSharpness','uCausticScale',
       'uTouchVelocity','uRippleCount',
     ];
-    for (let i = 0; i < MAX_RIPPLES; i++) uniformNames.push(`uRipples[${i}]`);
+    for (let i = 0; i < MAX_RIPPLES; i++) names.push(`uRipples[${i}]`);
 
-    gl.useProgram(prog);
-    for (const name of uniformNames) {
-      this._locs[name] = gl.getUniformLocation(prog, name);
-    }
-
-    // Texture units
+    gl.useProgram(this._prog);
+    for (const n of names) this._locs[n] = gl.getUniformLocation(this._prog, n);
     gl.uniform1i(this._locs['uTexA'], 0);
     gl.uniform1i(this._locs['uTexB'], 1);
 
-    // Empty VAO for the fullscreen triangle-strip draw
-    this._vao = gl.createVertexArray();
-
-    // Create 1×1 placeholder textures so the shader has something to sample
-    this._texA = this._placeholderTex([30, 30, 60, 255]);
-    this._texB = this._placeholderTex([60, 20, 80, 255]);
+    this._vao  = gl.createVertexArray();
+    this._texA = this._placeholderTex([18, 18, 40, 255]);
+    this._texB = this._placeholderTex([40, 12, 60, 255]);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -197,114 +296,85 @@ export class FluidShader {
 
   _compile(vertSrc, fragSrc) {
     const gl = this._gl;
-    const vert = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vert, vertSrc);
-    gl.compileShader(vert);
-    if (!gl.getShaderParameter(vert, gl.COMPILE_STATUS))
-      throw new Error('Vert: ' + gl.getShaderInfoLog(vert));
-
-    const frag = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(frag, fragSrc);
-    gl.compileShader(frag);
-    if (!gl.getShaderParameter(frag, gl.COMPILE_STATUS))
-      throw new Error('Frag: ' + gl.getShaderInfoLog(frag));
-
+    const mkShader = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+        throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    };
     const prog = gl.createProgram();
-    gl.attachShader(prog, vert);
-    gl.attachShader(prog, frag);
+    gl.attachShader(prog, mkShader(gl.VERTEX_SHADER,   vertSrc));
+    gl.attachShader(prog, mkShader(gl.FRAGMENT_SHADER, fragSrc));
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-      throw new Error('Link: ' + gl.getProgramInfoLog(prog));
-
-    gl.deleteShader(vert);
-    gl.deleteShader(frag);
+      throw new Error(gl.getProgramInfoLog(prog));
     return prog;
   }
 
-  // ── Rendering ─────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
 
-  _render(now) {
-    const gl = this._gl;
-    const canvas = this._canvas;
-
-    // Match canvas pixel size to display size
+  _render() {
+    const gl = this._gl, c = this._canvas;
     const dpr = window.devicePixelRatio || 1;
-    const w   = Math.round(canvas.clientWidth  * dpr);
-    const h   = Math.round(canvas.clientHeight * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width  = w;
-      canvas.height = h;
-    }
+    const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     gl.viewport(0, 0, w, h);
-    gl.clearColor(0, 0, 0, 0);
+    gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     gl.useProgram(this._prog);
     gl.bindVertexArray(this._vao);
 
-    // Bind textures
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this._texA);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this._texB);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this._texA);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this._texB);
 
-    const t  = this._elapsed();
-    const p  = this._params;
-    const lc = this._locs;
+    const t = this._elapsed(), p = this._params, l = this._locs;
+    gl.uniform1f(l['uTime'],             t);
+    gl.uniform1f(l['uAlphaA'],           this._alphaA);
+    gl.uniform1f(l['uAlphaB'],           this._alphaB);
+    gl.uniform1f(l['uDistortion'],       p.distortion);
+    gl.uniform2fv(l['uTouchUV'],         this._touchUV);
+    gl.uniform1f(l['uTouchStrength'],    this._touchStrength);
+    gl.uniform1f(l['uPatternScale'],     p.patternScale);
+    gl.uniform1f(l['uTimeScale'],        p.timeScale);
+    gl.uniform1f(l['uTouchRadius'],      p.touchRadius);
+    gl.uniform1f(l['uTouchPull'],        p.touchPull);
+    gl.uniform1f(l['uRippleStrength'],   p.rippleStrength);
+    gl.uniform1f(l['uRefractStrength'],  p.refractStrength);
+    gl.uniform1f(l['uChromaticSpread'],  p.chromaticSpread);
+    gl.uniform1f(l['uCausticStrength'],  p.causticStrength);
+    gl.uniform1f(l['uCausticSharpness'], p.causticSharpness);
+    gl.uniform1f(l['uCausticScale'],     p.causticScale);
+    gl.uniform2fv(l['uTouchVelocity'],   this._touchVelocity);
+    gl.uniform1i(l['uRippleCount'],      this._rippleCount);
 
-    gl.uniform1f(lc['uTime'],            t);
-    gl.uniform1f(lc['uAlphaA'],          this._alphaA);
-    gl.uniform1f(lc['uAlphaB'],          this._alphaB);
-    gl.uniform1f(lc['uDistortion'],      p.distortion);
-    gl.uniform2fv(lc['uTouchUV'],        this._touchUV);
-    gl.uniform1f(lc['uTouchStrength'],   this._touchStrength);
-    gl.uniform1f(lc['uPatternScale'],    p.patternScale);
-    gl.uniform1f(lc['uTimeScale'],       p.timeScale);
-    gl.uniform1f(lc['uTouchRadius'],     p.touchRadius);
-    gl.uniform1f(lc['uTouchPull'],       p.touchPull);
-    gl.uniform1f(lc['uRippleStrength'],  p.rippleStrength);
-    gl.uniform1f(lc['uRefractStrength'], p.refractStrength);
-    gl.uniform1f(lc['uChromaticSpread'],p.chromaticSpread);
-    gl.uniform1f(lc['uCausticStrength'], p.causticStrength);
-    gl.uniform1f(lc['uCausticSharpness'],p.causticSharpness);
-    gl.uniform1f(lc['uCausticScale'],    p.causticScale);
-    gl.uniform2fv(lc['uTouchVelocity'], this._touchVelocity);
-    gl.uniform1i(lc['uRippleCount'],     this._rippleCount);
-
-    // Upload ripple ring buffer as individual vec4 uniforms
     for (let i = 0; i < this._rippleCount; i++) {
-      const key = `uRipples[${i}]`;
-      if (lc[key]) {
-        const base = i * 4;
-        gl.uniform4f(lc[key],
-          this._ripples[base], this._ripples[base+1],
-          this._ripples[base+2], this._ripples[base+3]);
+      const loc = l[`uRipples[${i}]`];
+      if (loc) {
+        const b = i * 4;
+        gl.uniform4f(loc, this._ripples[b], this._ripples[b+1], this._ripples[b+2], this._ripples[b+3]);
       }
     }
 
-    // Fullscreen quad as triangle strip (4 verts, no index buffer)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  // ── Texture loading ───────────────────────────────────────────────────────
+  // ── Texture helpers ─────────────────────────────────────────────────────────
 
   async _loadTexture(source, existing) {
     const gl = this._gl;
     const tex = existing ?? gl.createTexture();
-
     let img;
     if (typeof source === 'string') {
       img = await new Promise((res, rej) => {
-        const i = new Image();
-        i.crossOrigin = 'anonymous';
-        i.onload  = () => res(i);
-        i.onerror = rej;
-        i.src = source;
+        const i = new Image(); i.crossOrigin = 'anonymous';
+        i.onload = () => res(i); i.onerror = rej; i.src = source;
       });
     } else {
       img = source;
     }
-
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -315,101 +385,77 @@ export class FluidShader {
   }
 
   _placeholderTex(rgba) {
-    const gl = this._gl;
-    const tex = gl.createTexture();
+    const gl = this._gl, tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
-      new Uint8Array(rgba));
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(rgba));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
   }
 
-  // ── Input handling ────────────────────────────────────────────────────────
+  // ── Input ───────────────────────────────────────────────────────────────────
 
   _bindEvents() {
     const c = this._canvas;
-    this._onMouseMove  = this._handleMove.bind(this);
-    this._onMouseDown  = this._handleDown.bind(this);
-    this._onMouseUp    = this._handleUp.bind(this);
-    this._onTouchMove  = (e) => { e.preventDefault(); this._handleMove(e.touches[0]); };
-    this._onTouchStart = (e) => { e.preventDefault(); this._handleDown(e.touches[0]); };
-    this._onTouchEnd   = (e) => { e.preventDefault(); this._handleUp(); };
-    this._onClick      = this._handleClick.bind(this);
-
-    c.addEventListener('mousemove',  this._onMouseMove);
-    c.addEventListener('mousedown',  this._onMouseDown);
-    c.addEventListener('mouseup',    this._onMouseUp);
-    c.addEventListener('mouseleave', this._onMouseUp);
-    c.addEventListener('touchmove',  this._onTouchMove,  { passive: false });
-    c.addEventListener('touchstart', this._onTouchStart, { passive: false });
-    c.addEventListener('touchend',   this._onTouchEnd,   { passive: false });
+    this._onMove  = this._handleMove.bind(this);
+    this._onDown  = this._handleDown.bind(this);
+    this._onUp    = this._handleUp.bind(this);
+    this._onTMove = (e) => { e.preventDefault(); this._handleMove(e.touches[0]); };
+    this._onTDown = (e) => { e.preventDefault(); this._handleDown(e.touches[0]); };
+    this._onTEnd  = (e) => { e.preventDefault(); this._handleUp(); };
+    this._onClick = this._handleClick.bind(this);
+    c.addEventListener('mousemove',  this._onMove);
+    c.addEventListener('mousedown',  this._onDown);
+    c.addEventListener('mouseup',    this._onUp);
+    c.addEventListener('mouseleave', this._onUp);
+    c.addEventListener('touchmove',  this._onTMove,  { passive: false });
+    c.addEventListener('touchstart', this._onTDown,  { passive: false });
+    c.addEventListener('touchend',   this._onTEnd,   { passive: false });
     c.addEventListener('click',      this._onClick);
   }
 
   _unbindEvents() {
     const c = this._canvas;
-    c.removeEventListener('mousemove',  this._onMouseMove);
-    c.removeEventListener('mousedown',  this._onMouseDown);
-    c.removeEventListener('mouseup',    this._onMouseUp);
-    c.removeEventListener('mouseleave', this._onMouseUp);
-    c.removeEventListener('touchmove',  this._onTouchMove);
-    c.removeEventListener('touchstart', this._onTouchStart);
-    c.removeEventListener('touchend',   this._onTouchEnd);
+    c.removeEventListener('mousemove',  this._onMove);
+    c.removeEventListener('mousedown',  this._onDown);
+    c.removeEventListener('mouseup',    this._onUp);
+    c.removeEventListener('mouseleave', this._onUp);
+    c.removeEventListener('touchmove',  this._onTMove);
+    c.removeEventListener('touchstart', this._onTDown);
+    c.removeEventListener('touchend',   this._onTEnd);
     c.removeEventListener('click',      this._onClick);
   }
 
-  _canvasUV(clientX, clientY) {
+  _uv(clientX, clientY) {
     const r = this._canvas.getBoundingClientRect();
-    return [
-      (clientX - r.left)  / r.width,
-      (clientY - r.top)   / r.height,
-    ];
+    return [(clientX - r.left) / r.width, (clientY - r.top) / r.height];
   }
 
   _handleMove(e) {
-    const uv  = this._canvasUV(e.clientX, e.clientY);
-    const now = performance.now();
-
+    const uv = this._uv(e.clientX, e.clientY), now = performance.now();
     if (this._lastTouchUV && this._lastTouchTime) {
       const dt  = Math.max((now - this._lastTouchTime) / 1000, 0.001);
-      const raw = [
-        (uv[0] - this._lastTouchUV[0]) / dt,
-        (uv[1] - this._lastTouchUV[1]) / dt,
-      ];
-      const α = this._params.touchSensitivity;
-      this._touchVelocity[0] = this._touchVelocity[0] * (1 - α) + raw[0] * α;
-      this._touchVelocity[1] = this._touchVelocity[1] * (1 - α) + raw[1] * α;
+      const α   = this._params.touchSensitivity;
+      this._touchVelocity[0] = this._touchVelocity[0] * (1-α) + ((uv[0] - this._lastTouchUV[0]) / dt) * α;
+      this._touchVelocity[1] = this._touchVelocity[1] * (1-α) + ((uv[1] - this._lastTouchUV[1]) / dt) * α;
     }
-    this._touchUV       = uv;
-    this._lastTouchUV   = uv;
-    this._lastTouchTime = now;
+    this._touchUV = uv; this._lastTouchUV = uv; this._lastTouchTime = now;
   }
 
-  _handleDown(e) {
-    this._touchStrength = 1.0;
-    this._handleMove(e);
-  }
+  _handleDown(e) { this._touchStrength = 1.0; this._handleMove(e); }
 
   _handleUp() {
-    this._touchStrength  = 0.0;
-    this._touchVelocity  = [0, 0];
-    this._lastTouchUV    = null;
-    this._lastTouchTime  = null;
+    this._touchStrength = 0.0; this._touchVelocity = [0, 0];
+    this._lastTouchUV = null; this._lastTouchTime = null;
   }
 
   _handleClick(e) {
-    const uv = this._canvasUV(e.clientX, e.clientY);
+    const uv = this._uv(e.clientX, e.clientY);
     this.addRipple(uv[0], uv[1], 1.0);
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  _elapsed() {
-    if (!this._startT) return 0;
-    return (performance.now() - this._startT) / 1000;
-  }
+  _elapsed() { return this._startT ? (performance.now() - this._startT) / 1000 : 0; }
 }
 
 export default FluidShader;
