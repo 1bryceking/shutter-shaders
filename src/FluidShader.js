@@ -26,6 +26,7 @@ const DEFAULTS = {
   causticSharpness:2.4,
   causticScale:    28.0,
   touchSensitivity:0.45,
+  blurSigma:       20,   // Gaussian blur applied to textures at load time (matches iOS MPS default)
 };
 
 // ── Inlined GLSL sources ──────────────────────────────────────────────────────
@@ -375,8 +376,24 @@ export class FluidShader {
     } else {
       img = source;
     }
+
+    // Apply Gaussian blur matching iOS MPSImageGaussianBlur at ingest time.
+    // Draw into an OffscreenCanvas with CSS blur filter so the shader receives
+    // a pre-blurred image, just like the Metal renderer does.
+    const sigma = this._params.blurSigma;
+    let uploadSrc = img;
+    if (sigma > 0) {
+      const w = img.naturalWidth  || img.width  || 512;
+      const h = img.naturalHeight || img.height || 512;
+      const oc  = new OffscreenCanvas(w, h);
+      const ctx = oc.getContext('2d');
+      ctx.filter = `blur(${sigma}px)`;
+      ctx.drawImage(img, 0, 0, w, h);
+      uploadSrc = oc;
+    }
+
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, uploadSrc);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -408,33 +425,33 @@ export class FluidShader {
 
   _bindEvents() {
     const c = this._canvas;
-    this._onMove  = this._handleMove.bind(this);
-    this._onDown  = this._handleDown.bind(this);
-    this._onUp    = this._handleUp.bind(this);
-    this._onTMove = (e) => { e.preventDefault(); this._handleMove(e.touches[0]); };
-    this._onTDown = (e) => { e.preventDefault(); this._handleDown(e.touches[0]); };
-    this._onTEnd  = (e) => { e.preventDefault(); this._handleUp(); };
-    this._onClick = this._handleClick.bind(this);
+    // Desktop: hover activates warp (no click required), click fires ripple
+    this._onEnter  = this._handleEnter.bind(this);
+    this._onMove   = this._handleMove.bind(this);
+    this._onLeave  = this._handleLeave.bind(this);
+    this._onClick  = this._handleClick.bind(this);
+    // Touch: contact activates warp, lift deactivates
+    this._onTMove  = (e) => { e.preventDefault(); this._handleMove(e.touches[0]); };
+    this._onTDown  = (e) => { e.preventDefault(); this._touchStrength = 1.0; this._handleMove(e.touches[0]); };
+    this._onTEnd   = (e) => { e.preventDefault(); this._handleLeave(); };
+    c.addEventListener('mouseenter', this._onEnter);
     c.addEventListener('mousemove',  this._onMove);
-    c.addEventListener('mousedown',  this._onDown);
-    c.addEventListener('mouseup',    this._onUp);
-    c.addEventListener('mouseleave', this._onUp);
+    c.addEventListener('mouseleave', this._onLeave);
+    c.addEventListener('click',      this._onClick);
     c.addEventListener('touchmove',  this._onTMove,  { passive: false });
     c.addEventListener('touchstart', this._onTDown,  { passive: false });
     c.addEventListener('touchend',   this._onTEnd,   { passive: false });
-    c.addEventListener('click',      this._onClick);
   }
 
   _unbindEvents() {
     const c = this._canvas;
+    c.removeEventListener('mouseenter', this._onEnter);
     c.removeEventListener('mousemove',  this._onMove);
-    c.removeEventListener('mousedown',  this._onDown);
-    c.removeEventListener('mouseup',    this._onUp);
-    c.removeEventListener('mouseleave', this._onUp);
+    c.removeEventListener('mouseleave', this._onLeave);
+    c.removeEventListener('click',      this._onClick);
     c.removeEventListener('touchmove',  this._onTMove);
     c.removeEventListener('touchstart', this._onTDown);
     c.removeEventListener('touchend',   this._onTEnd);
-    c.removeEventListener('click',      this._onClick);
   }
 
   _uv(clientX, clientY) {
@@ -442,20 +459,23 @@ export class FluidShader {
     return [(clientX - r.left) / r.width, (clientY - r.top) / r.height];
   }
 
+  _handleEnter(e) {
+    this._touchStrength = 1.0;
+    this._handleMove(e);
+  }
+
   _handleMove(e) {
     const uv = this._uv(e.clientX, e.clientY), now = performance.now();
     if (this._lastTouchUV && this._lastTouchTime) {
-      const dt  = Math.max((now - this._lastTouchTime) / 1000, 0.001);
-      const α   = this._params.touchSensitivity;
+      const dt = Math.max((now - this._lastTouchTime) / 1000, 0.001);
+      const α  = this._params.touchSensitivity;
       this._touchVelocity[0] = this._touchVelocity[0] * (1-α) + ((uv[0] - this._lastTouchUV[0]) / dt) * α;
       this._touchVelocity[1] = this._touchVelocity[1] * (1-α) + ((uv[1] - this._lastTouchUV[1]) / dt) * α;
     }
     this._touchUV = uv; this._lastTouchUV = uv; this._lastTouchTime = now;
   }
 
-  _handleDown(e) { this._touchStrength = 1.0; this._handleMove(e); }
-
-  _handleUp() {
+  _handleLeave() {
     this._touchStrength = 0.0; this._touchVelocity = [0, 0];
     this._lastTouchUV = null; this._lastTouchTime = null;
   }

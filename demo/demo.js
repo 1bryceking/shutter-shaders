@@ -19,6 +19,7 @@ const SLIDERS = [
   { key: 'causticStrength', label: 'Caustic Intensity', min: 0,    max: 2.0,  step: 0.01,  def: 0.55  },
   { key: 'causticSharpness',label: 'Caustic Sharpness', min: 1.0,  max: 8.0,  step: 0.1,   def: 2.4   },
   { key: 'causticScale',    label: 'Caustic Scale',     min: 1,    max: 60,   step: 0.5,   def: 28    },
+  { key: 'blurSigma',      label: 'Blur (on load)',    min: 0,    max: 60,   step: 1,     def: 20    },
 ];
 
 const canvas = document.getElementById('canvas');
