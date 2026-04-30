@@ -13,20 +13,21 @@
 
 const MAX_RIPPLES = 16;
 
+// Defaults synced from iOS FluidShaderParams (164debf — tuned ship values)
 const DEFAULTS = {
-  patternScale:    0.5,
-  timeScale:       0.5,
-  distortion:      0.016,
-  touchRadius:     0.25,
-  touchPull:       0.012,
-  rippleStrength:  0.045,
-  refractStrength: 1.4,
-  chromaticSpread: 0.22,
-  causticStrength: 0.55,
-  causticSharpness:2.4,
-  causticScale:    28.0,
-  touchSensitivity:0.45,
-  blurSigma:       20,   // Gaussian blur applied to textures at load time (matches iOS MPS default)
+  patternScale:    0.37,
+  timeScale:       0.86,
+  distortion:      0.080,
+  touchRadius:     0.27,
+  touchPull:       0.051,
+  rippleStrength:  0.078,
+  refractStrength: 2.87,
+  chromaticSpread: 0.42,
+  causticStrength: 1.25,
+  causticSharpness:2.01,
+  causticScale:    65.9,
+  touchSensitivity:0.32,
+  blurSigma:       28.3,
 };
 
 // ── Inlined GLSL sources ──────────────────────────────────────────────────────

@@ -7,19 +7,20 @@ function showError(msg) {
   document.body.appendChild(el);
 }
 
+// Slider ranges/defaults synced with iOS tuned ship values (164debf)
 const SLIDERS = [
-  { key: 'distortion',      label: 'Distortion',        min: 0,    max: 0.12, step: 0.001, def: 0.016 },
-  { key: 'patternScale',    label: 'Pattern Scale',     min: 0.1,  max: 3.0,  step: 0.05,  def: 0.5   },
-  { key: 'timeScale',       label: 'Time Scale',        min: 0.05, max: 2.0,  step: 0.05,  def: 0.5   },
-  { key: 'touchRadius',     label: 'Touch Radius',      min: 0.01, max: 0.5,  step: 0.005, def: 0.25  },
-  { key: 'touchPull',       label: 'Touch Pull',        min: 0,    max: 0.08, step: 0.001, def: 0.012 },
-  { key: 'rippleStrength',  label: 'Ripple Strength',   min: 0,    max: 0.15, step: 0.001, def: 0.045 },
-  { key: 'refractStrength', label: 'Refract',           min: 0,    max: 4.0,  step: 0.05,  def: 1.4   },
-  { key: 'chromaticSpread', label: 'Chromatic Split',   min: 0,    max: 0.8,  step: 0.01,  def: 0.22  },
-  { key: 'causticStrength', label: 'Caustic Intensity', min: 0,    max: 2.0,  step: 0.01,  def: 0.55  },
-  { key: 'causticSharpness',label: 'Caustic Sharpness', min: 1.0,  max: 8.0,  step: 0.1,   def: 2.4   },
-  { key: 'causticScale',    label: 'Caustic Scale',     min: 1,    max: 60,   step: 0.5,   def: 28    },
-  { key: 'blurSigma',      label: 'Blur (on load)',    min: 0,    max: 60,   step: 1,     def: 20    },
+  { key: 'distortion',      label: 'Distortion',        min: 0,    max: 0.15, step: 0.001, def: 0.080 },
+  { key: 'patternScale',    label: 'Pattern Scale',     min: 0.1,  max: 3.0,  step: 0.01,  def: 0.37  },
+  { key: 'timeScale',       label: 'Time Scale',        min: 0.05, max: 2.0,  step: 0.01,  def: 0.86  },
+  { key: 'touchRadius',     label: 'Touch Radius',      min: 0.01, max: 0.5,  step: 0.005, def: 0.27  },
+  { key: 'touchPull',       label: 'Touch Pull',        min: 0,    max: 0.12, step: 0.001, def: 0.051 },
+  { key: 'rippleStrength',  label: 'Ripple Strength',   min: 0,    max: 0.2,  step: 0.001, def: 0.078 },
+  { key: 'refractStrength', label: 'Refract',           min: 0,    max: 5.0,  step: 0.05,  def: 2.87  },
+  { key: 'chromaticSpread', label: 'Chromatic Split',   min: 0,    max: 1.0,  step: 0.01,  def: 0.42  },
+  { key: 'causticStrength', label: 'Caustic Intensity', min: 0,    max: 3.0,  step: 0.01,  def: 1.25  },
+  { key: 'causticSharpness',label: 'Caustic Sharpness', min: 1.0,  max: 8.0,  step: 0.1,   def: 2.01  },
+  { key: 'causticScale',    label: 'Caustic Scale',     min: 1,    max: 100,  step: 0.5,   def: 65.9  },
+  { key: 'blurSigma',       label: 'Blur (on load)',    min: 0,    max: 60,   step: 0.5,   def: 28.3  },
 ];
 
 const canvas = document.getElementById('canvas');
