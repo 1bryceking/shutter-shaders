@@ -457,7 +457,11 @@ export class FluidShader {
 
   _uv(clientX, clientY) {
     const r = this._canvas.getBoundingClientRect();
-    return [(clientX - r.left) / r.width, (clientY - r.top) / r.height];
+    // Vertex shader maps screen-top → UV.y=1 and screen-bottom → UV.y=0
+    // (see fluid.vert.glsl), so flip the top-down clientY here when
+    // producing shader UV — a pointer at the top of the canvas should
+    // drive the warp at the top of the image.
+    return [(clientX - r.left) / r.width, 1 - (clientY - r.top) / r.height];
   }
 
   _handleEnter(e) {
